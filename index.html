@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bouquet de code</title>
+<style>
+/* VOICE: tendre, nocturne, un cadeau qui se compile
+   IDEA: un éditeur de code la nuit, où le fichier bouquet.js fleurit
+   PICTURE: bouquet 3D en entonnoir, chaque pétale = lignes de code colorées, qui tourne
+   COLOUR and TYPE: fond encre #0a0e13, roses de lys, vert feuillage, bleu chardon ; monospace système
+   LAYOUT: le bouquet plein écran, un onglet en haut, une barre d'état en bas */
+:root{color-scheme:dark}
+html,body{margin:0;height:100%;overflow:hidden;background:#0a0e13;color:#8b97a6;
+  font:13px/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}
+body{background:radial-gradient(ellipse 70% 60% at 50% 42%,#16202b 0%,#0d131a 55%,#080b0f 100%)}
+canvas{position:fixed;inset:0;width:100%;height:100%;cursor:grab;touch-action:none}
+canvas.drag{cursor:grabbing}
+.tab{position:fixed;top:14px;left:16px;display:flex;gap:9px;align-items:center;font-size:13px}
+.tab b{color:#e6edf3;font-weight:500}
+.dot{width:8px;height:8px;border-radius:50%;background:#e9568d;box-shadow:0 0 10px #e9568d}
+.status{position:fixed;bottom:12px;left:16px;right:16px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;color:#5d6a78;pointer-events:none}
+.status span{white-space:nowrap}
+button{pointer-events:auto;background:#10161d;border:1px solid #2a3440;color:#a9b4c1;font:inherit;
+  padding:0 14px;height:36px;border-radius:6px;cursor:pointer;margin-left:10px}
+button:hover{color:#fff;border-color:#4a5866}
+button:focus-visible{outline:2px solid #e9568d;outline-offset:2px}
+button.sq{width:36px;padding:0;margin-left:6px;font-size:16px}
+.panel{position:fixed;top:0;right:0;bottom:0;width:min(680px,100%);background:#0b1016;border-left:1px solid #222c37;
+  display:flex;flex-direction:column;z-index:5}
+.panel[hidden]{display:none}
+.phead{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid #222c37;color:#e6edf3}
+.phead button{margin-left:6px}
+.panel pre{margin:0;padding:14px 16px;overflow:auto;flex:1;font:12px/1.55 inherit;color:#c9d1d9;white-space:pre;tab-size:2}
+@media(max-width:760px){.hint{display:none}}
+</style>
+</head>
+<body>
+<canvas id="c" aria-label="Bouquet de lys en lignes de code qui tourne sur lui-même"></canvas>
+<div class="tab"><span class="dot"></span><b>bouquet.js</b><span>— compilé avec amour</span></div>
+<div class="status">
+  <span><span id="count">…</span> · <span id="fps">… FPS</span></span>
+  <span><span class="hint">glisser : tourner · molette : zoom · Maj+glisser : déplacer</span><button id="zout" class="sq" type="button" aria-label="Dézoomer">−</button><button id="zin" class="sq" type="button" aria-label="Zoomer">+</button><button id="showCode" type="button">&lt;/&gt; code</button><button id="replay" type="button">↻ replanter</button></span>
+</div>
+<aside id="codePanel" class="panel" hidden aria-label="Code source">
+  <div class="phead"><b>bouquet.html</b><span><button id="copy" type="button">Copier le code</button><button id="closeCode" type="button">Fermer</button></span></div>
+  <pre id="src"></pre>
+</aside>
+<script>
+{
+const SRC = '<!DOCTYPE html>\n' + document.documentElement.outerHTML;
+/* ---------- utilitaires ---------- */
+let seed = 21032006;
+const R = () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+const rnd = (a, b) => a + (b - a) * R();
+const PI = Math.PI, TAU = PI * 2;
+const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const mul = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
+const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const len = a => Math.hypot(a[0], a[1], a[2]);
+const nrm = a => { const l = len(a) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
+const lerp = (a, b, t) => a + (b - a) * t;
+const lerpV = (a, b, t) => [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
+const clamp = (x, a, b) => x < a ? a : x > b ? b : x;
+const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+const hex = h => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+const mixC = (a, b, t) => [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
+const jit = (c, j) => [c[0] + rnd(-j, j), c[1] + rnd(-j, j), c[2] + rnd(-j, j)];
+const basis = A => { const h = Math.abs(A[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0]; const U = nrm(cross(A, h)); return [U, cross(A, U)]; };
+const curve = (f, n = 40) => { const a = []; for (let i = 0; i <= n; i++) a.push(f(i / n)); return a; };
+const pick = arr => arr[Math.floor(R() * arr.length)];
+
+/* ---------- le code qui fait les fleurs ---------- */
+const CODE = {
+  lily: 'const lys = bloom({ petales: 6, teinte: 340, parfum: "fort" }); for (let i = 0; i < 6; i++) { petale[i].courbe = t => Math.sin(t * PI) ** 0.8; } if (soleil.leve) lys.ouvrir(); return lys.eclat; ',
+  stamen: 'pollen++; anthere.briller(); ',
+  bud: 'await bouton.murir(); setTimeout(eclore, jours(3)); ',
+  thistle: 'chardon.epines = [...Array(12)].map(Math.random); if (touche) throw new Error("aie"); ',
+  white: 'jasmin.etoile(5); ',
+  euca: 'eucalyptus.feuilles.forEach(f => f.odeur = "frais"); ',
+  leaf: 'feuille.photosynthese(lumiere, co2); while (jour) veines.flux(eau); ',
+  fern: 'fougere.fronde.map((p, i) => p.derouler(phi ** i)); ',
+  stem: 'function pousser(tige) { while (tige.length < ciel) tige.push(cellule()); return tige; } ',
+  tie: 'noeud(); serrer(tiges, 7); ',
+  wisp: 'graine.vent = rand(); ',
+  ball: 'boule.fleurir(); '
+};
+// pétale de lys : des caractères au hasard, et « lola » écrit une seule fois sur la ligne centrale
+const RCH = '{}[]()<>=+-*/;:.,!?&|#%$_~^0123456789abcdefghijkmnpqrstuvwxyz';
+class PetalStream {
+  constructor(withName) { this.i = 0; this.name = withName; this.at = 6 + Math.floor(R() * 3); this.hot = false; }
+  next() { const j = this.i++; if (this.name && j >= this.at && j < this.at + 4) { this.hot = true; return 'lola'[j - this.at]; } this.hot = false; return RCH[Math.floor(R() * RCH.length)]; }
+}
+class Stream { constructor(s, i) { this.s = s; this.i = i === undefined ? Math.floor(R() * s.length) : i; } next() { return this.s[this.i++ % this.s.length]; } }
+const S = {}; for (const k in CODE) S[k] = new Stream(CODE[k]);
+
+/* ---------- émission des caractères ---------- */
+const CW = 0.019, LH = 0.030;   // pas le long d'une ligne / entre deux lignes (unités monde)
+let pts = [];
+let curMA = 0; // opacité minimale (tiges et lien restent visibles même à l'arrière)
+const pushPt = (p, tg, ch, c, o, s = 1) => { if (ch !== ' ') { const q = { p, tg, ch, mc: ch, c, mcol: c, o, s, ma: curMA }; pts.push(q); return q; } return null; };
+
+function emitLine(poly, stream, colFn, o0, o1, size = 1) {
+  const seg = []; let total = 0;
+  for (let i = 1; i < poly.length; i++) { const l = len(sub(poly[i], poly[i - 1])); seg.push(l); total += l; }
+  if (total < CW * 0.6) return;
+  let d = CW * size * 0.5, acc = 0, i = 0;
+  const seq = [], made = [], cols = [];
+  while (d < total) {
+    while (i < seg.length - 1 && acc + seg[i] < d) { acc += seg[i]; i++; }
+    const f = seg[i] ? (d - acc) / seg[i] : 0;
+    const p = lerpV(poly[i], poly[i + 1], f);
+    const u = d / total;
+    const ch = stream.next(), cc = colFn(u), q = pushPt(p, nrm(sub(poly[i + 1], poly[i])), ch, cc, lerp(o0, o1, u), size);
+    if (q) made.push([q, seq.length]); seq.push(ch); cols.push(cc);
+    d += CW * size;
+  }
+  // caractère « miroir » : utilisé quand la ligne est vue de droite à gauche, pour que le texte se lise toujours dans le bon sens
+  for (const [q, j] of made) { const m = seq.length - 1 - j; q.mc = seq[m]; q.mcol = cols[m]; }
+}
+
+// surface en ruban, remplie de lignes de code parallèles à l'axe
+function ribbon(C, Sd, N, w, streamArg, colFn, o0, o1, cup = 0, n = 40, size = 1, hotCol = null) {
+  const Q = []; for (let i = 0; i <= n; i++) { const s = i / n; Q.push({ s, c: C(s), sd: Sd(s), nn: N(s), w: w(s) }); }
+  let maxW = 0; for (const q of Q) maxW = Math.max(maxW, q.w);
+  const K = Math.floor(maxW / (LH * size) + 0.15);
+  for (let k = -K; k <= K; k++) {
+    const o = k * LH * size; let run = [];
+    const stream = typeof streamArg === 'function' ? streamArg(k) : streamArg;
+    const flush = () => {
+      if (run.length > 1) {
+        const pl = run.map(q => add(add(q.c, mul(q.sd, o)), mul(q.nn, cup * o * o)));
+        const s0 = run[0].s, s1 = run[run.length - 1].s;
+        emitLine(pl, stream, u => { if (hotCol && stream.hot) return hotCol; const s = lerp(s0, s1, u); return colFn(s, Math.min(1, Math.abs(o) / Math.max(1e-4, w(s))), k); }, lerp(o0, o1, s0), lerp(o0, o1, s1), size);
+      }
+      run = [];
+    };
+    for (const q of Q) { if (q.w >= Math.abs(o) * 0.98) run.push(q); else flush(); }
+    flush();
+  }
+}
+
+function disc(C, E1, E2, r, stream, colFn, o0, o1) {
+  const K = Math.floor(r / LH + 0.3);
+  for (let k = -K; k <= K; k++) {
+    const o = k * LH, h2 = r * r - o * o; if (h2 <= 0) continue;
+    const hl = Math.sqrt(h2); if (hl < CW * 0.6) continue;
+    const m = add(C, mul(E2, o));
+    emitLine([add(m, mul(E1, -hl)), add(m, mul(E1, hl))], stream, u => colFn(u, Math.abs(o) / r), o0, o1);
+  }
+}
+
+function blob(C, A, a, h, stream, colFn, o0, o1) {
+  const [U, W] = basis(A);
+  const n = Math.max(1, Math.round(h / (LH * 0.75)));
+  for (let i = 0; i <= n; i++) {
+    const z = -h / 2 + h * i / n, rr = a * Math.sqrt(Math.max(0, 1 - (2 * z / h) ** 2)), oo = lerp(o0, o1, i / n);
+    if (rr < 0.008) { pushPt(add(C, mul(A, z)), U, stream.next(), colFn(i / n), oo); continue; }
+    const ring = curve(t => add(add(C, mul(A, z)), add(mul(U, rr * Math.cos(t * TAU)), mul(W, rr * Math.sin(t * TAU)))), 28);
+    emitLine(ring, stream, () => colFn(i / n), oo, oo + 0.02);
+  }
+}
+
+/* ---------- géométrie du bouquet ---------- */
+const DOME = [0, 0.32, 0], DRx = 0.74, DRy = 0.44;
+const TIE = [0, -0.6, 0], BOTTOM_Y = -1.22;
+const heads = [];  // départs de tiges
+const domePoint = (az, el, k = 1) => [Math.cos(az) * Math.cos(el) * DRx * k, DOME[1] + Math.sin(el) * DRy * k, Math.sin(az) * Math.cos(el) * DRx * k];
+const outward = (p, upBias = 0.3) => nrm(add(sub(p, [0, 0.05, 0]), [0, upBias, 0]));
+// rayon de l'entonnoir : large en haut, se resserre doucement jusqu'au lien
+const rf = y => { const t = clamp((y - TIE[1]) / (DOME[1] - TIE[1]), 0, 1); return 0.09 + 0.92 * Math.pow(t, 1.35); };
+
+const C_LBASE = hex('#f6f0dc'), C_LOUT = hex('#e04a84'), C_LIN = hex('#f06c9d'), C_LDEEP = hex('#c42b63'), C_LEDGE = hex('#ffe0ec'), C_SPOT = hex('#8a1743');
+
+// white = lys blanc (cœur vert tendre, « lola » en rose pour qu'on le voie bien)
+function lily(c, A, o, white = false) {
+  const [U, W] = basis(A), rot = rnd(0, TAU);
+  for (let k = 0; k < 6; k++) {
+    const outer = k % 2 === 0, phi = rot + k * PI / 3 + rnd(-0.08, 0.08);
+    const Rk = add(mul(U, Math.cos(phi)), mul(W, Math.sin(phi))), Sk = nrm(cross(A, Rk));
+    const L = (outer ? 0.36 : 0.34) * rnd(0.92, 1.06), Wd = outer ? 0.092 : 0.115;
+    const th0 = outer ? 0.7 : 0.6, th1 = rnd(1.65, 1.95), n = 40;
+    const P = [], Nn = []; let pos = add(c, mul(Rk, 0.012));
+    for (let i = 0; i <= n; i++) {
+      const s = i / n, th = th0 + (th1 - th0) * Math.pow(s, 1.7);
+      const d = add(mul(A, Math.cos(th)), mul(Rk, Math.sin(th)));
+      P.push(pos); Nn.push(nrm(cross(Sk, d))); pos = add(pos, mul(d, L / n));
+    }
+    const idx = s => Math.round(s * n);
+    const w = s => Wd * Math.pow(Math.max(0, Math.sin(PI * Math.pow(s, 0.8))), 0.8);
+    const col = (s, u) => {
+      if (white) {
+        let cw = mixC(hex('#d9e6b0'), outer ? hex('#eeeae4') : hex('#fbf9f6'), smooth(0.04, 0.35, s));
+        if (u < 0.25 && s > 0.08) cw = mixC(cw, hex('#e4ebc6'), 0.6 * (1 - u / 0.25) * (1 - smooth(0.3, 0.7, s)));
+        return jit(cw, 4);
+      }
+      let cc = mixC(C_LBASE, outer ? C_LOUT : C_LIN, smooth(0.04, 0.3, s));
+      if (u < 0.3 && s > 0.08) cc = mixC(cc, C_LDEEP, 0.55 * (1 - u / 0.3) * smooth(0.08, 0.25, s));
+      if (u > 0.7) cc = mixC(cc, C_LEDGE, smooth(0.7, 1, u) * 0.55);
+      if (s > 0.12 && s < 0.5 && u > 0.2 && u < 0.7 && R() < 0.08) cc = C_SPOT;
+      return jit(cc, 5);
+    };
+    const cup = -2.5, po = o + (outer ? 0 : 0.02);
+    ribbon(s => P[idx(s)], () => Sk, s => Nn[idx(s)], w, k => new PetalStream(k === 0), col, po, o + 0.13, cup, n, 0.92, white ? hex('#e9568d') : hex('#fff6fa'));
+    // contour du pétale : un trait clair continu qui le détache de ses voisins
+    for (const sg of [-1, 1]) {
+      const edge = []; for (let i = 0; i <= n; i++) { const s = i / n, ww = w(s) + 0.008; edge.push(add(add(P[i], mul(Sk, sg * ww)), mul(Nn[i], cup * ww * ww))); }
+      emitLine(edge, new Stream('─', 0), u => white ? mixC(hex('#a9c08a'), hex('#c9d6b4'), u) : mixC(hex('#ffd9e8'), hex('#ffffff'), smooth(0.3, 1, u) * 0.6), po, o + 0.13, 0.62);
+    }
+  }
+  for (let k = 0; k < 6; k++) {
+    const phi = rot + k * PI / 3 + PI / 6, Rk = add(mul(U, Math.cos(phi)), mul(W, Math.sin(phi))), L = 0.2 * rnd(0.9, 1.1);
+    emitLine(curve(s => add(add(c, mul(A, L * s)), mul(Rk, 0.07 * s * s + 0.01)), 12), S.stamen,
+      u => u > 0.82 ? jit(hex('#b8621c'), 10) : mixC(hex('#eef3c8'), hex('#c9d98a'), u), o + 0.1, o + 0.16, 0.9);
+  }
+  emitLine(curve(s => add(c, mul(A, 0.23 * s)), 10), S.stamen, u => u > 0.88 ? hex('#e6df84') : hex('#d6e5a5'), o + 0.1, o + 0.16, 0.9);
+  heads.push({ p: sub(c, mul(A, 0.03)), w: 1.2, o });
+}
+
+function bud(b, D, o) {
+  const [U, W] = basis(D), L = rnd(0.17, 0.24), r0 = rnd(0.026, 0.034);
+  for (let j = 0; j < 6; j++) {
+    const a = j / 6 * TAU + rnd(-0.1, 0.1);
+    emitLine(curve(s => { const r = r0 * Math.pow(Math.max(0, Math.sin(PI * Math.pow(s, 0.62))), 0.9); return add(add(b, mul(D, L * s)), add(mul(U, r * Math.cos(a)), mul(W, r * Math.sin(a)))); }, 20),
+      S.bud, u => jit(mixC(mixC(hex('#a8c27a'), hex('#e7a3bb'), smooth(0.25, 0.7, u)), hex('#d76592'), smooth(0.8, 1, u) * 0.6), 8), o, o + 0.08);
+  }
+  heads.push({ p: b, w: 1, o });
+}
+
+function thistle(c, A, o) {
+  const [U, W] = basis(A);
+  const blues = ['#5b7de0', '#7a8cf0', '#4a5fc4', '#6c74e0'].map(hex);
+  blob(c, A, 0.042, 0.078, S.thistle, () => jit(pick(blues), 12), o, o + 0.08);
+  const base = sub(c, mul(A, 0.028));
+  for (let k = 0; k < 11; k++) {
+    const phi = k / 11 * TAU + rnd(-0.15, 0.15), Rk = add(mul(U, Math.cos(phi)), mul(W, Math.sin(phi)));
+    const d = nrm(add(Rk, mul(A, rnd(-0.35, 0.1)))), L = rnd(0.08, 0.12);
+    emitLine(curve(s => add(base, add(mul(d, L * s), mul(A, -0.02 * s * s))), 8), S.thistle, u => jit(mixC(hex('#8ea3d8'), hex('#c8d4ef'), u), 8), o + 0.03, o + 0.1, 0.85);
+  }
+  heads.push({ p: sub(c, mul(A, 0.05)), w: 0.9, o });
+}
+
+function ball(c, o) {
+  blob(c, nrm(c), 0.045, 0.08, S.ball, () => jit(pick(['#dfe8a6', '#cbd88a', '#eef2c4'].map(hex)), 8), o, o + 0.06);
+  heads.push({ p: c, w: 0.9, o });
+}
+
+function starlet(c, A, o) {
+  const [U, W] = basis(A), rot = rnd(0, TAU);
+  for (let k = 0; k < 5; k++) {
+    const phi = rot + k / 5 * TAU, d = add(mul(U, Math.cos(phi)), mul(W, Math.sin(phi)));
+    emitLine([add(c, mul(d, 0.008)), add(c, mul(d, 0.045))], S.white, () => jit(hex('#f4f4ec'), 6), o, o + 0.03, 0.8);
+  }
+  pushPt(c, U, '*', hex('#ecd36a'), o, 0.9);
+  const inner = mul(c, 0.72); inner[1] = c[1] - 0.06;
+  emitLine([inner, c], S.stem, () => jit(hex('#7fa86a'), 8), o - 0.04, o, 0.7);
+}
+
+function wisp(b, D, L, o) {
+  const P = s => add(add(b, mul(D, L * s)), [0, 0.05 * s * s, 0]);
+  emitLine(curve(P, 16), S.wisp, () => jit(hex('#9db27c'), 8), o, o + 0.06, 0.7);
+  for (let i = 0; i < 3; i++) {
+    const s = rnd(0.55, 1), p = P(s), d = nrm(add(D, [rnd(-0.6, 0.6), rnd(0, 0.6), rnd(-0.6, 0.6)])), e = add(p, mul(d, rnd(0.03, 0.07)));
+    emitLine([p, e], S.wisp, () => jit(hex('#9db27c'), 8), o + 0.05, o + 0.08, 0.7);
+    pushPt(e, d, pick(['o', '°', '*']), jit(hex('#f1efe0'), 6), o + 0.09, 0.8);
+  }
+}
+
+function euca(b, D, L, o) {
+  const P = s => add(add(b, mul(D, L * s)), [0, -0.08 * s * s, 0]);
+  emitLine(curve(P, 30), S.euca, () => jit(hex('#8c7f73'), 8), o, o + 0.12, 0.85);
+  const greys = ['#8fb0a0', '#a3c2b3', '#7fa192', '#b4cfc2'].map(hex);
+  const nPairs = Math.floor(L / 0.075);
+  for (let i = 1; i <= nPairs; i++) {
+    const s = i / (nPairs + 0.6), p = P(s), tg = nrm(sub(P(Math.min(1, s + 0.01)), p));
+    const r = lerp(0.05, 0.03, s) * rnd(0.85, 1.1), [u1, u2] = basis(tg), ang = rnd(0, TAU);
+    const perp = add(mul(u1, Math.cos(ang)), mul(u2, Math.sin(ang)));
+    for (const sg of [-1, 1]) {
+      const E2 = nrm(add(mul(perp, sg), mul(cross(tg, perp), rnd(-0.5, 0.5))));
+      const base = pick(greys);
+      disc(add(p, mul(E2, r + 0.008)), tg, E2, r, S.euca, (u, e) => jit(mixC(base, hex('#d4e4dc'), e * 0.35), 8), o + s * 0.15, o + s * 0.15 + 0.05);
+    }
+  }
+}
+
+function leaf(b, D, L, o) {
+  let side = cross(D, [0, 1, 0]); if (len(side) < 0.1) side = cross(D, [1, 0, 0]); side = nrm(side);
+  const roll = rnd(-0.7, 0.7), n0 = nrm(cross(side, D));
+  const sd = nrm(add(mul(side, Math.cos(roll)), mul(n0, Math.sin(roll)))), nn = nrm(cross(sd, D));
+  const droop = rnd(0.02, 0.07), Wd = L * rnd(0.28, 0.36);
+  const base = hex(pick(['#3f9a4a', '#4caf50', '#378a42', '#5aa84a'])), dark = mixC(base, [20, 50, 25], 0.45), light = mixC(base, [200, 235, 170], 0.25);
+  ribbon(s => add(add(b, mul(D, L * s)), [0, -droop * s * s, 0]), () => sd, () => nn,
+    s => Wd * Math.pow(Math.max(0, Math.sin(PI * Math.pow(s, 0.75))), 0.9),
+    S.leaf, (s, u, k) => k === 0 ? jit(dark, 6) : jit(mixC(base, light, u * 0.6), 10), o, o + 0.1, -1.2, 24);
+}
+
+function fern(b, D, L, o) {
+  const droop = rnd(0.05, 0.16), P = s => add(add(b, mul(D, L * s)), [0, -droop * s * s, 0]);
+  emitLine(curve(P, 30), S.fern, () => jit(hex('#2f6e30'), 8), o, o + 0.12, 0.85);
+  let side = cross(D, [0, 1, 0]); if (len(side) < 0.1) side = [1, 0, 0]; side = nrm(side);
+  const roll = rnd(-0.5, 0.5), nv = nrm(cross(side, D)); side = nrm(add(mul(side, Math.cos(roll)), mul(nv, Math.sin(roll))));
+  const n = Math.floor(L / 0.028);
+  for (let i = 1; i < n; i++) {
+    const s = i / n, p = P(s), tg = nrm(sub(P(Math.min(1, s + 0.01)), P(Math.max(0, s - 0.01))));
+    const d = nrm(add(mul(side, i % 2 ? 1 : -1), mul(tg, 0.55))), pl = 0.085 * Math.pow(1 - s, 0.8) + 0.02;
+    emitLine([p, add(p, mul(d, pl))], S.fern, u => jit(mixC(hex('#3f8f3b'), hex('#66b04e'), u * 0.6), 10), o + s * 0.12, o + s * 0.12 + 0.04, 0.85);
+  }
+}
+
+// verdure placée dans l'entonnoir : beaucoup en haut, de moins en moins vers le lien
+function placeGreen(count, fn, yMin, yMax, Lr, betaFn, stemChance) {
+  for (let i = 0; i < count; i++) {
+    const t = Math.sqrt(R()), y = lerp(yMin, yMax, t), az = rnd(0, TAU);
+    const radial = [Math.cos(az), 0, Math.sin(az)], br = rf(y) * rnd(0.35, 0.7);
+    const b = [radial[0] * br, y, radial[2] * br];
+    const tn = clamp((y - TIE[1]) / (DOME[1] - TIE[1]), 0, 1), beta = betaFn(tn);
+    const D = nrm(add(mul(radial, Math.cos(beta)), [0, Math.sin(beta), 0]));
+    let L = rnd(Lr[0], Lr[1]) * (0.45 + 0.55 * tn);
+    for (let k = 0; k < 14; k++) { const tip = add(b, mul(D, L)); if (Math.hypot(tip[0], tip[2]) <= rf(tip[1]) * 1.1 + 0.05) break; L *= 0.88; }
+    const o = lerp(0.52, 0.3, tn) + rnd(0, 0.08);
+    fn(b, D, L, o);
+    if (R() < stemChance) heads.push({ p: b, w: 0.85, o });
+  }
+}
+
+function build() {
+  seed = 21032006; pts = []; heads.length = 0;
+  for (const k in S) S[k].i = Math.floor(R() * S[k].s.length);
+
+  // feuillage : l'entonnoir
+  placeGreen(85, leaf, TIE[1] + 0.06, DOME[1] + 0.05, [0.2, 0.3], tn => lerp(0.95, 0.1, tn) + rnd(-0.25, 0.25), 0.08);
+  placeGreen(16, fern, TIE[1] + 0.15, DOME[1], [0.36, 0.52], tn => lerp(0.85, 0.15, tn) + rnd(-0.2, 0.2), 0.15);
+  placeGreen(10, leaf, 0.15, 0.45, [0.16, 0.22], () => rnd(0.5, 1.0), 0);
+  for (let i = 0; i < 11; i++) {
+    const az = i / 11 * TAU + rnd(-0.2, 0.2), y = rnd(0.05, 0.45), radial = [Math.cos(az), 0, Math.sin(az)];
+    euca(add(mul(radial, 0.35), [0, y, 0]), nrm(add(radial, [0, rnd(-0.1, 0.35), 0])), rnd(0.5, 0.7), rnd(0.42, 0.5));
+    if (i % 2) heads.push({ p: add(mul(radial, 0.35), [0, y, 0]), w: 0.85, o: 0.42 });
+  }
+  for (let i = 0; i < 10; i++) {
+    const az = rnd(0, TAU), el = rnd(-0.1, 0.6), b = domePoint(az, el, 0.8);
+    wisp(b, outward(b, 0.4), rnd(0.35, 0.55), rnd(0.75, 0.85));
+  }
+
+  // fleurs sur le dôme
+  const lilies = [[0, 1.45, 0.5]];
+  for (let i = 0; i < 4; i++) lilies.push([i * PI / 2 + 0.3, 0.8, 0.15]);
+  for (let i = 0; i < 5; i++) lilies.push([i * TAU / 5 + 0.9, 0.12, 0.0]);
+  for (let i = 0; i < 5; i++) lilies.push([i * TAU / 5 + 0.3, 0.45, 0.08, true]);   // lys en plus, entre les autres
+  for (let i = 0; i < 3; i++) lilies.push([i * TAU / 3 + 1.2, 1.1, 0.3, true]);
+  for (const [az, el, ub, white] of lilies) { const c = domePoint(az, el); lily(c, outward(c, ub), rnd(0.55, 0.68), !!white); }
+  for (let i = 0; i < 6; i++) { const az = i / 6 * TAU + 0.55, c = domePoint(az, rnd(0.45, 0.62), 0.97); thistle(c, outward(c), rnd(0.6, 0.7)); }
+  for (let i = 0; i < 10; i++) { const az = i / 10 * TAU + rnd(-0.2, 0.2), b = domePoint(az, rnd(0.25, 1.2), 0.95); bud(b, outward(b, 0.45), rnd(0.62, 0.72)); }
+  for (let i = 0; i < 4; i++) { const az = i * PI / 2 + 1.1; ball(domePoint(az, rnd(0.1, 0.5), 1.02), rnd(0.6, 0.66)); }
+  for (let i = 0; i < 34; i++) {
+    let c;
+    if (i < 24) c = domePoint(rnd(0, TAU), rnd(-0.1, 1.2), rnd(1.02, 1.12));
+    else { const y = rnd(-0.3, 0.05), az = rnd(0, TAU), r = rf(y) * 1.02; c = [Math.cos(az) * r, y, Math.sin(az) * r]; }
+    starlet(c, outward(c, 0.2), rnd(0.8, 0.92));
+  }
+
+  // tiges : convergent vers le lien puis s'écartent légèrement
+  for (const h of heads) {
+    const hr = Math.hypot(h.p[0], h.p[2]) || 1, hd = [h.p[0] / hr, 0, h.p[2] / hr];
+    const off = rnd(0.0, 0.06), ja = rnd(-0.5, 0.5);
+    const tdir = [-(hd[0] * Math.cos(ja) - hd[2] * Math.sin(ja)), 0, -(hd[0] * Math.sin(ja) + hd[2] * Math.cos(ja))];
+    const T = [-tdir[0] * off, TIE[1] + rnd(-0.02, 0.02), -tdir[2] * off];
+    const E = [T[0] + tdir[0] * rnd(0.06, 0.16) + rnd(-0.02, 0.02), BOTTOM_Y + rnd(-0.06, 0.05), T[2] + tdir[2] * rnd(0.06, 0.16) + rnd(-0.02, 0.02)];
+    const dn = nrm(sub(E, T)), P1 = sub(T, mul(dn, 0.45 * len(sub(h.p, T))));
+    const up = curve(s => add(add(mul(h.p, (1 - s) ** 2), mul(P1, 2 * (1 - s) * s)), mul(T, s * s)), 30);
+    const poly = up.concat(curve(s => lerpV(T, E, s), 16).slice(1));
+    const base = hex(pick(['#6fb552', '#7cc35e', '#5ea648', '#86c96a'])), side = [-tdir[2], 0, tdir[0]];
+    curMA = 0.42;
+    for (const sg of [-1, 1]) emitLine(poly.map(q => add(q, mul(side, sg * 0.0095))), S.stem, u => u > 0.98 ? hex('#d8eab0') : jit(base, 10), 0.32, 0.0, h.w * 0.95);
+    curMA = 0;
+  }
+  // le lien en raphia
+  curMA = 0.55;
+  const turns = 11, tieCol = [hex('#e6c194'), hex('#c99a68')];
+  emitLine(curve(s => { const a = s * turns * TAU; return [Math.cos(a) * 0.092, TIE[1] + 0.075 - 0.15 * s, Math.sin(a) * 0.092]; }, 520),
+    S.tie, u => jit(tieCol[Math.floor(u * turns) % 2], 10), 0.27, 0.33, 0.8);
+  curMA = 0;
+}
+
+/* ---------- atlas de glyphes ---------- */
+const CELL_W = 22, CELL_H = 32, FONT = '600 25px ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace';
+let atlas, N, PX, PY, PZ, TX, TY, TZ, GX, GY, GX2, GY2, OR, SZ, MA;
+function pack() {
+  const keys = new Map(), list = [];
+  N = pts.length;
+  PX = new Float32Array(N); PY = new Float32Array(N); PZ = new Float32Array(N);
+  TX = new Float32Array(N); TY = new Float32Array(N); TZ = new Float32Array(N);
+  GX = new Uint16Array(N); GY = new Uint16Array(N); GX2 = new Uint16Array(N); GY2 = new Uint16Array(N); OR = new Float32Array(N); SZ = new Float32Array(N); MA = new Float32Array(N);
+  const q = v => clamp(Math.round(v / 12) * 12, 0, 255);
+  const cells = [], cells2 = [];
+  const idOf = (ch, col) => { const key = ch + col; let id = keys.get(key); if (id === undefined) { id = list.length; keys.set(key, id); list.push([ch, col]); } return id; };
+  pts.forEach((pt, i) => {
+    const cs = c => `rgb(${q(c[0])},${q(c[1])},${q(c[2])})`;
+    cells[i] = idOf(pt.ch, cs(pt.c)); cells2[i] = idOf(pt.mc, cs(pt.mcol));
+    PX[i] = pt.p[0]; PY[i] = pt.p[1]; PZ[i] = pt.p[2]; TX[i] = pt.tg[0]; TY[i] = pt.tg[1]; TZ[i] = pt.tg[2];
+    OR[i] = pt.o; SZ[i] = pt.s; MA[i] = pt.ma;
+  });
+  const cols = 90, rows = Math.ceil(list.length / cols);
+  atlas = document.createElement('canvas'); atlas.width = cols * CELL_W; atlas.height = rows * CELL_H;
+  const a = atlas.getContext('2d'); a.font = FONT; a.textAlign = 'center'; a.textBaseline = 'middle';
+  list.forEach(([ch, col], id) => { a.fillStyle = col; a.fillText(ch, (id % cols) * CELL_W + CELL_W / 2, Math.floor(id / cols) * CELL_H + CELL_H / 2 + 1); });
+  for (let i = 0; i < N; i++) { GX[i] = (cells[i] % cols) * CELL_W; GY[i] = Math.floor(cells[i] / cols) * CELL_H; GX2[i] = (cells2[i] % cols) * CELL_W; GY2[i] = Math.floor(cells2[i] / cols) * CELL_H; }
+}
+
+build(); pack();
+document.getElementById('count').textContent = `● ${N.toLocaleString('fr-FR')} caractères · ${heads.length} tiges`;
+
+/* ---------- rendu ---------- */
+const cv = document.getElementById('c');
+const gl = cv.getContext('webgl2', { antialias: false, premultipliedAlpha: true, alpha: true, powerPreference: 'high-performance' });
+const ctx = gl ? null : cv.getContext('2d');
+let W = 0, H = 0, dpr = 1, F = 1, qScale = 1, maxDpr = 2, slow = 0;
+const CAM = 5, YC = -0.18, GH = 0.04;
+function resize() {
+  dpr = Math.min(window.devicePixelRatio || 1, maxDpr);
+  W = cv.clientWidth; H = cv.clientHeight;
+  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+  if (gl) gl.viewport(0, 0, cv.width, cv.height);
+  F = Math.min(H * 0.84 / 2.45, W * 0.92 / 2.9) * CAM * qScale;
+}
+const ro = new ResizeObserver(resize); ro.observe(cv); resize();
+
+const NB = 512; let SX, SY, SS, SA, BK, FL;
+const counts = new Uint32Array(NB + 1);
+let order = new Uint32Array(0);
+function alloc() { SX = new Float32Array(N); SY = new Float32Array(N); SS = new Float32Array(N); SA = new Float32Array(N); FL = new Uint8Array(N); BK = new Uint16Array(N); order = new Uint32Array(N); }
+alloc();
+
+/* ---------- rendu GPU (WebGL2) : tous les caractères en un seul appel, 60 FPS ---------- */
+let G = null;
+if (gl) {
+  const VS = `#version 300 es
+  in vec2 aCorner; in vec3 aPos; in vec3 aTan; in vec4 aUV; in vec4 aMeta;
+  uniform mat3 uRot; uniform float uYC, uCam, uFZ, uGH, uReveal; uniform vec2 uView, uPan, uCell, uAtlas;
+  out vec2 vUV; out float vFog;
+  void main() {
+    vec3 p = uRot * (aPos - vec3(0.0, uYC, 0.0));
+    float sc = uFZ / (uCam - p.z);
+    vec2 sp = vec2(uView.x * 0.5 + uPan.x + p.x * sc, uView.y * 0.5 + uPan.y - p.y * sc);
+    vec3 t = uRot * aTan;
+    float ang = (t.x * t.x + t.y * t.y) > 0.04 ? atan(-t.y, t.x) : 0.0, fl = 0.0;
+    if (ang > 1.5707963) { ang -= 3.1415927; fl = 1.0; } else if (ang < -1.5707963) { ang += 3.1415927; fl = 1.0; }
+    float s = uGH * sc * aMeta.y, d = uReveal - aMeta.x;
+    if (d < 0.0) s = 0.0; else if (d < 0.025) s *= 1.0 + (1.0 - d / 0.025) * 0.9;
+    float dn = clamp(((p.z + 1.4) / 2.8 - 0.2) / 0.65, 0.0, 1.0);
+    float al = max(aMeta.z, 0.07 + 0.93 * dn * dn);
+    if (al < 0.1) s = 0.0;
+    vFog = al;
+    vec2 c = aCorner * vec2(uCell.x / uCell.y, 1.0) * s;
+    float ca = cos(ang), sa = sin(ang);
+    vec2 q = sp + vec2(c.x * ca - c.y * sa, c.x * sa + c.y * ca);
+    vec2 uv = fl > 0.5 ? aUV.zw : aUV.xy;
+    vUV = (uv + (aCorner + 0.5) * uCell) / uAtlas;
+    gl_Position = vec4(q.x / uView.x * 2.0 - 1.0, 1.0 - q.y / uView.y * 2.0, clamp(-p.z / 3.0, -0.99, 0.99), 1.0);
+  }`;
+  const FS = `#version 300 es
+  precision mediump float;
+  uniform sampler2D uTex; uniform vec3 uBg; uniform float uCut;
+  in vec2 vUV; in float vFog; out vec4 o;
+  void main() {
+    vec4 c = texture(uTex, vUV);
+    if (c.a < uCut) discard;
+    o = vec4(mix(uBg * c.a, c.rgb, vFog), c.a);
+  }`;
+  const sh = (type, src) => { const x = gl.createShader(type); gl.shaderSource(x, src); gl.compileShader(x); if (!gl.getShaderParameter(x, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(x)); return x; };
+  const prog = gl.createProgram();
+  gl.attachShader(prog, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FS)); gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+  gl.useProgram(prog);
+  const vao = gl.createVertexArray(); gl.bindVertexArray(vao);
+  const cb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, cb);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-0.5, -0.5, 0.5, -0.5, -0.5, 0.5, 0.5, 0.5]), gl.STATIC_DRAW);
+  const loc = n => gl.getAttribLocation(prog, n);
+  gl.enableVertexAttribArray(loc('aCorner')); gl.vertexAttribPointer(loc('aCorner'), 2, gl.FLOAT, false, 0, 0);
+  const STR = 14, data = new Float32Array(N * STR);
+  for (let i = 0; i < N; i++) {
+    const b = i * STR;
+    data[b] = PX[i]; data[b + 1] = PY[i]; data[b + 2] = PZ[i];
+    data[b + 3] = TX[i]; data[b + 4] = TY[i]; data[b + 5] = TZ[i];
+    data[b + 6] = GX[i]; data[b + 7] = GY[i]; data[b + 8] = GX2[i]; data[b + 9] = GY2[i];
+    data[b + 10] = OR[i]; data[b + 11] = SZ[i]; data[b + 12] = MA[i]; data[b + 13] = 0;
+  }
+  const ib = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, ib); gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+  [['aPos', 3, 0], ['aTan', 3, 3], ['aUV', 4, 6], ['aMeta', 4, 10]].forEach(([n, size, off]) => {
+    const l = loc(n); gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, size, gl.FLOAT, false, STR * 4, off * 4); gl.vertexAttribDivisor(l, 1);
+  });
+  const tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, atlas);
+  gl.generateMipmap(gl.TEXTURE_2D);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  const U = {}; ['uRot', 'uYC', 'uCam', 'uFZ', 'uGH', 'uReveal', 'uView', 'uPan', 'uCell', 'uAtlas', 'uTex', 'uBg', 'uCut'].forEach(n => U[n] = gl.getUniformLocation(prog, n));
+  gl.uniform1f(U.uYC, YC); gl.uniform1f(U.uCam, CAM); gl.uniform1f(U.uGH, GH);
+  gl.uniform2f(U.uCell, CELL_W, CELL_H); gl.uniform2f(U.uAtlas, atlas.width, atlas.height);
+  gl.uniform1i(U.uTex, 0); gl.uniform3f(U.uBg, 0.07, 0.10, 0.137);
+  gl.enable(gl.DEPTH_TEST); gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+  gl.clearColor(0, 0, 0, 0);
+  G = { U, draw(cy, sy, cp, sp, rv) {
+    gl.uniformMatrix3fv(U.uRot, false, [cy, sp * sy, -cp * sy, 0, cp, sp, sy, -sp * cy, cp * cy]);
+    gl.uniform1f(U.uFZ, F * zoom); gl.uniform1f(U.uReveal, rv);
+    gl.uniform2f(U.uView, W, H); gl.uniform2f(U.uPan, panX, panY);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    // passe 1 : profondeur seule (le cœur des lettres), passe 2 : couleur avec les bords adoucis
+    gl.colorMask(false, false, false, false); gl.depthMask(true); gl.depthFunc(gl.LESS); gl.uniform1f(U.uCut, 0.5);
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, N);
+    gl.colorMask(true, true, true, true); gl.depthMask(false); gl.depthFunc(gl.LEQUAL); gl.uniform1f(U.uCut, 0.06);
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, N);
+  } };
+}
+
+let zoom = 1, panX = 0, panY = 0, fpsN = 0, fpsT = performance.now();
+const fpsEl = document.getElementById('fps');
+let yaw = 0.4, pitch = 0.1, vel = 0, dragging = false, lastX = 0, lastY = 0, t0 = performance.now(), last = t0;
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const AUTO = reduced ? 0.06 : 0.32, REVEAL = reduced ? 0.01 : 5.5;
+
+function frame(now) {
+  const raw = (now - last) / 1000, dt = Math.min(0.05, raw); last = now;
+  fpsN++; if (now - fpsT > 1000) { fpsEl.textContent = Math.round(fpsN * 1000 / (now - fpsT)) + ' FPS' + (G ? '' : ' (mode simple)'); fpsN = 0; fpsT = now; }
+  if (raw > 0.021 && maxDpr > 1) { if (++slow > 45) { maxDpr = 1; slow = 0; resize(); } } else slow = Math.max(0, slow - 1);
+  const t = (now - t0) / 1000, rv = t / REVEAL * 1.05;
+  if (!dragging) { yaw += (AUTO * (zoom > 1.3 ? 0.25 : 1) + vel) * dt; vel *= 0.95; }
+  if (zoom <= 1.001) { panX *= 0.85; panY *= 0.85; }
+  const p = pitch + (reduced ? 0 : 0.025 * Math.sin(t * 0.6));
+  const cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(p), sp = Math.sin(p);
+  if (G) { G.draw(cy, sy, cp, sp, rv); requestAnimationFrame(frame); return; }
+  const cx = W / 2 + panX, cyS = H / 2 + panY, FZ = F * zoom;
+  counts.fill(0);
+  for (let i = 0; i < N; i++) {
+    const x = PX[i], y = PY[i] - YC, z = PZ[i];
+    const x1 = x * cy + z * sy, z1 = -x * sy + z * cy;
+    const y2 = y * cp - z1 * sp, z2 = y * sp + z1 * cp;
+    const sc = FZ / (CAM - z2);
+    SX[i] = cx + x1 * sc; SY[i] = cyS - y2 * sc;
+    const tx = TX[i] * cy + TZ[i] * sy, tz1 = -TX[i] * sy + TZ[i] * cy, ty = TY[i] * cp - tz1 * sp;
+    let ang = (tx * tx + ty * ty) > 0.04 ? Math.atan2(-ty, tx) : 0;
+    let fl = 0; if (ang > PI / 2) { ang -= PI; fl = 1; } else if (ang < -PI / 2) { ang += PI; fl = 1; }
+    SA[i] = ang; FL[i] = fl;
+    let s = GH * sc * SZ[i];
+    if (OR[i] > rv) s = 0; else if (rv - OR[i] < 0.025) s *= 1 + (1 - (rv - OR[i]) / 0.025) * 0.9;
+    SS[i] = s;
+    const b = clamp(Math.floor((z2 + 1.4) / 2.8 * NB), 0, NB - 1); BK[i] = b; counts[b + 1]++;
+  }
+  for (let b = 1; b <= NB; b++) counts[b] += counts[b - 1];
+  for (let i = 0; i < N; i++) order[counts[BK[i]]++] = i;
+
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, cv.width, cv.height);
+  const k0 = dpr / CELL_H;
+  for (let j = 0; j < N; j++) {
+    const i = order[j], s = SS[i]; if (s < 0.6) continue;
+    const x = SX[i], y = SY[i]; if (x < -s || y < -s || x > W + s || y > H + s) continue;
+    const dn = clamp((BK[i] / NB - 0.2) / 0.65, 0, 1), al = Math.max(MA[i], 0.07 + 0.93 * dn * dn); if (al < 0.1) continue; ctx.globalAlpha = al;
+    const k = s * k0, c = Math.cos(SA[i]) * k, sn = Math.sin(SA[i]) * k;
+    ctx.setTransform(c, sn, -sn, c, SX[i] * dpr, SY[i] * dpr);
+    if (FL[i]) ctx.drawImage(atlas, GX2[i], GY2[i], CELL_W, CELL_H, -CELL_W / 2, -CELL_H / 2, CELL_W, CELL_H);
+    else ctx.drawImage(atlas, GX[i], GY[i], CELL_W, CELL_H, -CELL_W / 2, -CELL_H / 2, CELL_W, CELL_H);
+  }
+  ctx.globalAlpha = 1;
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+// rotation, zoom, déplacement
+const ptrs = new Map(); let pinch = null, panning = false;
+function zoomAt(mx, my, nz) {
+  nz = clamp(nz, 0.6, 8);
+  const px = (mx - W / 2 - panX) / zoom, py = (my - H / 2 - panY) / zoom;
+  zoom = nz; panX = mx - W / 2 - px * zoom; panY = my - H / 2 - py * zoom;
+}
+cv.addEventListener('pointerdown', e => {
+  ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY }); cv.setPointerCapture(e.pointerId);
+  if (ptrs.size === 1) { dragging = true; panning = e.shiftKey || e.button === 1; lastX = e.clientX; lastY = e.clientY; vel = 0; cv.classList.add('drag'); }
+  else if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 }; }
+});
+cv.addEventListener('pointermove', e => {
+  if (!ptrs.has(e.pointerId)) return;
+  ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (ptrs.size >= 2 && pinch) {
+    const [a, b] = [...ptrs.values()], d = Math.hypot(a.x - b.x, a.y - b.y), mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+    zoomAt(mx, my, zoom * d / Math.max(1, pinch.d)); panX += mx - pinch.mx; panY += my - pinch.my;
+    pinch = { d, mx, my }; return;
+  }
+  if (!dragging) return;
+  const dx = e.clientX - lastX, dy = e.clientY - lastY; lastX = e.clientX; lastY = e.clientY;
+  if (panning) { panX += dx; panY += dy; return; }
+  yaw += dx * 0.008 / Math.sqrt(zoom); pitch = clamp(pitch + dy * 0.004, -0.5, 0.6); vel = dx * 0.3 / zoom;
+});
+const up = e => {
+  ptrs.delete(e.pointerId);
+  if (ptrs.size < 2) pinch = null;
+  if (ptrs.size === 1) { const r = [...ptrs.values()][0]; lastX = r.x; lastY = r.y; }
+  if (ptrs.size === 0) { dragging = false; panning = false; cv.classList.remove('drag'); vel = clamp(vel, -3, 3); }
+};
+cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
+cv.addEventListener('wheel', e => { e.preventDefault(); zoomAt(e.clientX, e.clientY, zoom * Math.exp(-e.deltaY * 0.0015)); }, { passive: false });
+cv.addEventListener('dblclick', () => { zoom = 1; });
+document.getElementById('zin').addEventListener('click', () => zoomAt(W / 2, H / 2, zoom * 1.4));
+document.getElementById('zout').addEventListener('click', () => zoomAt(W / 2, H / 2, zoom / 1.4));
+
+// panneau du code
+const panel = document.getElementById('codePanel'), pre = document.getElementById('src'), copyBtn = document.getElementById('copy');
+pre.textContent = SRC;
+document.getElementById('showCode').addEventListener('click', () => { panel.hidden = !panel.hidden; });
+document.getElementById('closeCode').addEventListener('click', () => { panel.hidden = true; });
+addEventListener('keydown', e => { if (e.key === 'Escape') panel.hidden = true; });
+copyBtn.addEventListener('click', () => {
+  const selectAll = () => { const r = document.createRange(); r.selectNodeContents(pre); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); copyBtn.textContent = 'Sélectionné : Ctrl+C'; };
+  try { navigator.clipboard.writeText(SRC).then(() => { copyBtn.textContent = 'Copié ✓'; setTimeout(() => copyBtn.textContent = 'Copier le code', 1800); }, selectAll); } catch (err) { selectAll(); }
+});
+document.getElementById('replay').addEventListener('click', () => { t0 = performance.now(); });
+}
+</script>
+</body>
+</html>
