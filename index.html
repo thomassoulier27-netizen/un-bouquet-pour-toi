@@ -32,12 +32,42 @@ button.sq{width:36px;padding:0;margin-left:6px;font-size:16px}
 .phead{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid #222c37;color:#e6edf3}
 .phead button{margin-left:6px}
 .panel pre{margin:0;padding:14px 16px;overflow:auto;flex:1;font:12px/1.55 inherit;color:#c9d1d9;white-space:pre;tab-size:2}
+#ov{position:fixed;inset:0;width:100%;height:100%;pointer-events:none}
+.found{position:fixed;top:38px;left:16px;font-size:12px;color:#f3a9c6;background:none;border:0;padding:4px 0;height:auto;margin:0;cursor:default;opacity:0;transition:opacity .8s}
+.found.on{opacity:1}.found.done{cursor:pointer;text-decoration:underline;text-underline-offset:3px}
+.toast{position:fixed;left:50%;top:18%;transform:translateX(-50%);background:rgba(13,17,23,.92);border:1px solid rgba(233,86,141,.45);color:#f6e6ee;
+  padding:10px 16px;border-radius:999px;font-size:13px;white-space:nowrap;opacity:0;transition:opacity .8s;pointer-events:none}
+.toast.on{opacity:1}
+.card{position:fixed;left:50%;bottom:72px;transform:translateX(-50%);width:min(460px,calc(100vw - 24px));max-height:68vh;overflow:auto;
+  background:rgba(12,16,22,.96);border:1px solid rgba(233,86,141,.5);border-radius:14px;padding:14px 18px 18px;color:#f6e9ef;
+  box-shadow:0 0 50px rgba(233,86,141,.25);z-index:6;animation:pop .35s ease-out}
+.card[hidden]{display:none}
+@keyframes pop{from{opacity:0;transform:translate(-50%,12px)}to{opacity:1;transform:translate(-50%,0)}}
+.chead{display:flex;justify-content:space-between;align-items:center;color:#7d8a99;font-size:12px;margin-bottom:8px}
+.chead button{margin:0;width:36px;padding:0;font-size:18px;line-height:1}
+#ctext{margin:0;font-size:15px;line-height:1.6;min-height:1.6em;white-space:pre-wrap}
+#ctext .cur{display:inline-block;width:.55em;background:#e9568d;animation:blink 1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+#clist{list-style:none;margin:12px 0 0;padding:0}
+#clist li{opacity:0;transform:translateY(6px);transition:opacity .45s,transform .45s;padding:3px 0;font-size:15px}
+#clist li.on{opacity:1;transform:none}
+#clist li b{color:#e9568d;font-weight:500;margin-right:10px}
+.cend{opacity:0;transition:opacity .8s;margin:14px 0 0;font-size:15px;line-height:1.6}
+.cend.on{opacity:1}.cend em{display:block;margin-top:8px;color:#f3a9c6;font-style:normal}
 @media(max-width:760px){.hint{display:none}}
 </style>
 </head>
 <body>
 <canvas id="c" aria-label="Bouquet de lys en lignes de code qui tourne sur lui-même"></canvas>
 <div class="tab"><span class="dot"></span><b>bouquet pour toi</b><span>— tu me manques</span></div>
+<button id="found" class="found" type="button" tabindex="-1">✦ 0 / 10 messages trouvés</button>
+<div id="toast" class="toast">✦ Touche les lys qui brillent : ils cachent des messages</div>
+<div id="card" class="card" hidden role="dialog" aria-live="polite">
+  <div class="chead"><span id="ctag"></span><button id="cclose" type="button" aria-label="Fermer">×</button></div>
+  <p id="ctext"></p>
+  <ul id="clist"></ul>
+  <p id="cend" class="cend"></p>
+</div>
 <div class="status">
   <span><span id="count">…</span> · <span id="fps">… FPS</span></span>
   <span><span class="hint">glisser : tourner · molette : zoom · Maj+glisser : déplacer</span><button id="zout" class="sq" type="button" aria-label="Dézoomer">−</button><button id="zin" class="sq" type="button" aria-label="Zoomer">+</button><button id="showCode" type="button">&lt;/&gt; code</button><button id="replay" type="button">↻ replanter</button></span>
@@ -166,6 +196,7 @@ function blob(C, A, a, h, stream, colFn, o0, o1) {
 const DOME = [0, 0.32, 0], DRx = 0.74, DRy = 0.44;
 const TIE = [0, -0.6, 0], BOTTOM_Y = -1.22;
 const heads = [];  // départs de tiges
+const LILIES = []; // centres des lys (pour les messages cachés)
 const domePoint = (az, el, k = 1) => [Math.cos(az) * Math.cos(el) * DRx * k, DOME[1] + Math.sin(el) * DRy * k, Math.sin(az) * Math.cos(el) * DRx * k];
 const outward = (p, upBias = 0.3) => nrm(add(sub(p, [0, 0.05, 0]), [0, upBias, 0]));
 // rayon de l'entonnoir : large en haut, se resserre doucement jusqu'au lien
@@ -175,6 +206,7 @@ const C_LBASE = hex('#f6f0dc'), C_LOUT = hex('#e04a84'), C_LIN = hex('#f06c9d'),
 
 // white = lys blanc (cœur vert tendre, « lola » en rose pour qu'on le voie bien)
 function lily(c, A, o, white = false) {
+  LILIES.push({ c, A, white });
   const [U, W] = basis(A), rot = rnd(0, TAU);
   for (let k = 0; k < 6; k++) {
     const outer = k % 2 === 0, phi = rot + k * PI / 3 + rnd(-0.08, 0.08);
@@ -325,7 +357,7 @@ function placeGreen(count, fn, yMin, yMax, Lr, betaFn, stemChance) {
 }
 
 function build() {
-  seed = 21032006; pts = []; heads.length = 0;
+  seed = 21032006; pts = []; heads.length = 0; LILIES.length = 0;
   for (const k in S) S[k].i = Math.floor(R() * S[k].s.length);
 
   // feuillage : l'entonnoir
@@ -414,6 +446,7 @@ document.getElementById('count').textContent = `● ${N.toLocaleString('fr-FR')}
 const cv = document.getElementById('c');
 const gl = cv.getContext('webgl2', { antialias: false, premultipliedAlpha: true, alpha: true, powerPreference: 'high-performance' });
 const ctx = gl ? null : cv.getContext('2d');
+const OV = {};
 let W = 0, H = 0, dpr = 1, F = 1, qScale = 1, maxDpr = 2, slow = 0;
 const CAM = 5, YC = -0.18, GH = 0.04;
 function resize() {
@@ -421,8 +454,10 @@ function resize() {
   W = cv.clientWidth; H = cv.clientHeight;
   cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
   if (gl) gl.viewport(0, 0, cv.width, cv.height);
+  if (OV.c) { OV.c.width = cv.width; OV.c.height = cv.height; }
   F = Math.min(H * 0.84 / 2.45, W * 0.92 / 2.9) * CAM * qScale;
 }
+const ov = document.createElement('canvas'); ov.id = 'ov'; cv.after(ov); OV.c = ov; const octx = ov.getContext('2d');
 const ro = new ResizeObserver(resize); ro.observe(cv); resize();
 
 const NB = 512; let SX, SY, SS, SA, BK, FL;
@@ -526,10 +561,11 @@ function frame(now) {
   fpsN++; if (now - fpsT > 1000) { fpsEl.textContent = Math.round(fpsN * 1000 / (now - fpsT)) + ' FPS' + (G ? '' : ' (mode simple)'); fpsN = 0; fpsT = now; }
   if (raw > 0.021 && maxDpr > 1) { if (++slow > 45) { maxDpr = 1; slow = 0; resize(); } } else slow = Math.max(0, slow - 1);
   const t = (now - t0) / 1000, rv = t / REVEAL * 1.05;
-  if (!dragging) { yaw += (AUTO * (zoom > 1.3 ? 0.25 : 1) + vel) * dt; vel *= 0.95; }
+  if (!dragging) { yaw += (AUTO * (zoom > 1.3 ? 0.25 : 1) * (card.hidden ? 1 : 0.15) + vel) * dt; vel *= 0.95; }
   if (zoom <= 1.001) { panX *= 0.85; panY *= 0.85; }
   const p = pitch + (reduced ? 0 : 0.025 * Math.sin(t * 0.6));
   const cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(p), sp = Math.sin(p);
+  drawMarkers(cy, sy, cp, sp, t, rv);
   if (G) { G.draw(cy, sy, cp, sp, rv); requestAnimationFrame(frame); return; }
   const cx = W / 2 + panX, cyS = H / 2 + panY, FZ = F * zoom;
   counts.fill(0);
@@ -615,6 +651,81 @@ copyBtn.addEventListener('click', () => {
   try { navigator.clipboard.writeText(SRC).then(() => { copyBtn.textContent = 'Copié ✓'; setTimeout(() => copyBtn.textContent = 'Copier le code', 1800); }, selectAll); } catch (err) { selectAll(); }
 });
 document.getElementById('replay').addEventListener('click', () => { t0 = performance.now(); });
+
+// ---------- messages cachés dans les lys ----------
+const MSG = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob('eyJpdGVtcyI6IFt7InRhZyI6ICJseXMudHh0IiwgInRleHQiOiAiRGVzIGx5cywgcGFyY2UgcXVlIGplIHNhaXMgcXVlIGMnZXN0IHRlcyBmbGV1cnMgcHLDqWbDqXLDqWVzLiBTYXVmIHF1ZSBjZXV4LWzDoCBuZSBmYW5lcm9udCBqYW1haXMuIn0sIHsidGFnIjogImNhcF9kX2FnZGUubG9nIiwgInRleHQiOiAiVHUgdGUgc291dmllbnMgZHUgQ2FwIGQnQWdkZcKgPyBUb3VzIGxlcyBkZXV4IGJvdXJyw6lzLCBGYXRhbCBCYXpvb2th4oCmIE9uIGF2YWl0IHRlbGxlbWVudCBhZG9yw6kuIE1haXMgbGUgbWlldXgsIGMnZXN0IHF1J29uIMOpdGFpdCBlbnNlbWJsZS4ifSwgeyJ0YWciOiAia2ZjLmpzIiwgInRleHQiOiAiRCdhaWxsZXVycywgamUgc3VpcyB0b3Vqb3VycyBwcsOqdCDDoCByZWTDqXBlbnNlciB0b3VzIG1lcyBzb3VzIGF1IEtGQyBhdmVjIHRvaS4gTW9uIGNvbXB0ZSBlbiBiYW5xdWUsIHBldXQtw6p0cmUgcGFzLiJ9LCB7InRhZyI6ICJkb2RvLmV4ZSIsICJ0ZXh0IjogIk5vdHJlIGFjdGl2aXTDqSBwcsOpZsOpcsOpZcKgOiBkb3JtaXIgZW5zZW1ibGUgZXQgcmllbiBmYWlyZSBkZSBsYSBqb3VybsOpZS4gT24gYXVyYWl0IHB1IGRldmVuaXIgY2hhbXBpb25zIGR1IG1vbmRlIHRvdXMgbGVzIGRldXguIn0sIHsidGFnIjogIndhdGVybWVsb24ubXAzIiwgInRleHQiOiAiU2kgamUgdGUgZGlzIFdhdGVybWVsb24sIMOnYSB0ZSByYXBwZWxsZSBkZXMgc291dmVuaXJzwqA/IEplIHNhaXMgcXVlIGMnw6l0YWl0IG5vdHJlIG11c2lxdWUuIn0sIHsidGFnIjogIjlfZmV2cmllci5tZCIsICJ0ZXh0IjogIk9uIGEgZXUgbm90cmUgcHJlbWllciBiaXNvdSBsZSA5IGbDqXZyaWVyLiBNYWlzIHRvaSBjb21tZSBtb2ksIG9uIHNhaXQgcXUnb24gcydhaW1haXQgZGVwdWlzIGJpZW4gYXZhbnQuIn0sIHsidGFnIjogInZpYV9mZXJyYXRhLmNmZyIsICJ0ZXh0IjogIlRvaSwgdCdhZG9yZXMgbGVzIHZpYSBmZXJyYXRhLiBNb2kgYXVzc2kuIENvb2wsIMOnYSBub3VzIGZhaXQgdW4gcG9pbnQgY29tbXVuLiJ9LCB7InRhZyI6ICJsaXN0ZV9wb3VyX2RlX3ZyYWkudG9kbyIsICJ0ZXh0IjogIlR1IHRlIHNvdXZpZW5zIGRlIGNlIHF1ZSB0dSBhdmFpcyBlbnZpZSBkZSBmYWlyZSBhdmVjIG1vacKgPyBVbiBiaXZvdWFjLCBzZSBtYXJpZXIsIHZpdnJlIGVuc2VtYmxlLCB1biBkYXRlIGF1IHJlc3RhdXJhbnQsIHZveWFnZXIgZGFucyB1biBhdXRyZSBwYXlzLCB1biByb2FkIHRyaXAsIHByZW5kcmUgbCdhdmlvbiwgYWxsZXIgw6AgRGlzbmV5bGFuZOKApiBJbCBuJ2VzdCBwYXMgdHJvcCB0YXJkIHBvdXIgbGUgZmFpcmUuIn0sIHsidGFnIjogIm5vdXMuY3NzIiwgInRleHQiOiAiT24gw6l0YWl0IHRlbGxlbWVudCBtaWdub25zLiBDJ2VzdCBwYXMgbW9pIHF1aSBsZSBkaXPigKYgbWFpcyBqZSBsZSBwZW5zZS4gQm9uLCBlbiBmYWl0LCBjJ2VzdCBtb2kgcXVpIGxlIGRpcy4ifSwgeyJ0YWciOiAibWVzc2FnZV91cmdlbnQuanMiLCAidGV4dCI6ICJNZXNzYWdlIGRlIHRvbiBhdXRpc3RlIHByw6lmw6lyw6nCoDogdHUgbWUgbWFucXVlcy4gSmUgbCdhaSBjYWNow6kgZGFucyB1biBseXMgcG91ciDDqnRyZSBzw7tyIHF1ZSB0dSBsZSB0cm91dmVzLiBMZSBtZXNzYWdlLCBwYXMgbCdhdXRpc3RlLiJ9XSwgImZpbmFsIjogeyJ0YWciOiAibGlzdGVfcG91cl9kZV9mYXV4LnR4dCIsICJib3giOiAi4pyTIiwgImludHJvIjogIlR1IGxlcyBhcyB0b3VzIHRyb3V2w6lzLiBFdCB0YSBsaXN0ZSBpcm9uaXF1ZSwgdHUgdCdlbiBzb3V2aWVuc8KgPyIsICJsaXN0IjogWyJEw6lwZW5zZXIgdG91dCBtb24gYXJnZW50IGF1IEtGQyIsICJVbiBmZXUgZGUgY2FtcCBhdSBib3JkIGRlIGwnZWF1IiwgIlZpc2l0ZXIgdW5lIGdyb3R0ZSIsICJSZW5jb250cmVyIG1lcyBwb3RlcyIsICJBdm9pciBub3RyZSBiYWMgZW5zZW1ibGUiLCAiU2UgYmFpZ25lciBkYW5zIGxlIGxhYyBkJ0FubmVjeSIsICJGYWlyZSBkZXMgcmFuZG9zIiwgIlVuIGRhdGUgw6AgbCdlc2NhbGFkZSIsICJSZW5jb250cmVyIG1hIGZhbWlsbGUiXSwgIm91dHJvIjogIkNlbGxlLWzDoCwgb24gbCdhIGZhaXRlIGVuIGVudGllciwgdG91cyBsZXMgZGV1eC4gTCdhdXRyZSwgaidhaSBlbmNvcmUgZW52aWUgZGUgbGEgZmFpcmUgYXZlYyB0b2kuIiwgInNpZ24iOiAi4oCUIHRvbiBhdXRpc3RlIHByw6lmw6lyw6nCoOKZpSJ9fQ=='), c => c.charCodeAt(0))));
+const PICK = [0, 1, 3, 5, 7, 9, 10, 12, 14, 16];
+const MSG_L = MSG.items.map((it, i) => ({ c: LILIES[PICK[i]].c, msg: it, found: false, ph: i * 1.7, sx: 0, sy: 0, r: 0, vis: false }));
+const card = document.getElementById('card'), ctag = document.getElementById('ctag'), ctext = document.getElementById('ctext'),
+  clist = document.getElementById('clist'), cend = document.getElementById('cend'), foundEl = document.getElementById('found'), toast = document.getElementById('toast');
+let nFound = 0, finalShown = false, typing = null, timers = [];
+function drawMarkers(cy, sy, cp, sp, t, rv) {
+  octx.setTransform(dpr, 0, 0, dpr, 0, 0); octx.clearRect(0, 0, W, H);
+  const FZ = F * zoom, cx = W / 2 + panX, cyS = H / 2 + panY;
+  for (const m of MSG_L) {
+    const x = m.c[0], y = m.c[1] - YC, z = m.c[2];
+    const x1 = x * cy + z * sy, z1 = -x * sy + z * cy, y2 = y * cp - z1 * sp, z2 = y * sp + z1 * cp;
+    const sc = FZ / (CAM - z2);
+    m.sx = cx + x1 * sc; m.sy = cyS - y2 * sc; m.r = Math.max(30, 0.22 * sc); m.vis = z2 > -0.25;
+    if (rv < 1 || !m.vis) continue;
+    const pulse = 0.5 + 0.5 * Math.sin(t * 3 + m.ph), k = Math.min(1.8, Math.max(0.9, Math.sqrt(zoom)));
+    const a = m.found ? 0.35 : 0.55 + 0.45 * pulse, rr = (m.found ? 6 : 9 + 5 * pulse) * k;
+    const g = octx.createRadialGradient(m.sx, m.sy, 0, m.sx, m.sy, rr * 3);
+    g.addColorStop(0, `rgba(255,240,248,${a})`); g.addColorStop(0.35, `rgba(255,110,165,${a * 0.5})`); g.addColorStop(1, 'rgba(255,110,165,0)');
+    octx.fillStyle = g; octx.beginPath(); octx.arc(m.sx, m.sy, rr * 3, 0, TAU); octx.fill();
+    octx.fillStyle = `rgba(255,255,255,${Math.min(1, a + 0.2)})`; octx.font = `${Math.round(rr * 1.7)}px sans-serif`;
+    octx.textAlign = 'center'; octx.textBaseline = 'middle'; octx.fillText(m.found ? '✓' : '✦', m.sx, m.sy + 1);
+  }
+}
+function stopAnims() { if (typing) { clearInterval(typing.id); typing = null; } timers.forEach(clearTimeout); timers = []; }
+function typeText(text, done) {
+  stopAnims(); let i = 0; ctext.textContent = '';
+  const cur = document.createElement('span'); cur.className = 'cur'; cur.textContent = ' ';
+  const tick = () => { ctext.textContent = text.slice(0, i); ctext.appendChild(cur); if (i++ >= text.length) { cur.remove(); clearInterval(typing.id); typing = null; done && done(); } };
+  typing = { id: setInterval(tick, 28), text, done }; tick();
+}
+function skipTyping() { if (!typing) return; const { text, done } = typing; clearInterval(typing.id); typing = null; ctext.textContent = text; done && done(); }
+function openMsg(m) {
+  if (!m.found) { m.found = true; nFound++; updateFound(); }
+  clist.innerHTML = ''; cend.className = 'cend'; cend.innerHTML = '';
+  ctag.textContent = `// ${m.msg.tag}`; card.hidden = false; card.style.animation = 'none'; card.offsetHeight; card.style.animation = '';
+  typeText(m.msg.text);
+}
+function showFinal() {
+  const f = MSG.final; finalShown = true; updateFound();
+  ctag.textContent = `// ${f.tag}`; card.hidden = false; clist.innerHTML = ''; cend.className = 'cend'; cend.innerHTML = '';
+  typeText(f.intro, () => {
+    f.list.forEach((it, i) => {
+      const li = document.createElement('li'); li.innerHTML = `<b>${f.box || '☐'}</b>`; li.append(it); clist.appendChild(li);
+      timers.push(setTimeout(() => li.classList.add('on'), 250 + i * 280));
+    });
+    timers.push(setTimeout(() => { cend.textContent = f.outro; const em = document.createElement('em'); em.textContent = f.sign; cend.appendChild(em); cend.classList.add('on'); }, 400 + f.list.length * 280));
+  });
+}
+function closeCard() {
+  stopAnims(); card.hidden = true;
+  if (nFound === MSG_L.length && !finalShown) setTimeout(showFinal, 450);
+}
+function updateFound() {
+  foundEl.textContent = nFound === MSG_L.length ? (finalShown ? '♥ 10 / 10 · relire la dernière liste' : '♥ 10 / 10 messages trouvés') : `✦ ${nFound} / ${MSG_L.length} messages trouvés`;
+  foundEl.classList.toggle('done', finalShown); foundEl.tabIndex = finalShown ? 0 : -1;
+}
+foundEl.addEventListener('click', () => { if (finalShown) showFinal(); });
+document.getElementById('cclose').addEventListener('click', closeCard);
+card.addEventListener('click', e => { if (e.target.id !== 'cclose') skipTyping(); });
+addEventListener('keydown', e => { if (e.key === 'Escape' && !card.hidden) closeCard(); });
+let tap = null;
+cv.addEventListener('pointerdown', e => { tap = ptrs.size <= 1 ? { x: e.clientX, y: e.clientY, ok: true } : null; });
+cv.addEventListener('pointermove', e => { if (tap && Math.hypot(e.clientX - tap.x, e.clientY - tap.y) > 8) tap.ok = false; });
+cv.addEventListener('pointerup', e => {
+  const tp = tap; tap = null;
+  if (!tp || !tp.ok || ptrs.size !== 0) return;
+  if (!card.hidden) { closeCard(); return; }
+  let best = null, bd = 1e9;
+  for (const m of MSG_L) { if (!m.vis) continue; const d = Math.hypot(e.clientX - m.sx, e.clientY - m.sy); if (d < m.r * 1.3 && d < bd) { bd = d; best = m; } }
+  if (best) openMsg(best);
+});
+setTimeout(() => { foundEl.classList.add('on'); toast.classList.add('on'); setTimeout(() => toast.classList.remove('on'), 7000); }, reduced ? 500 : 6200);
 }
 </script>
 </body>
